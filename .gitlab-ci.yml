@@ -1,0 +1,46 @@
+before_script:
+  - export GIT_SSL_NO_VERIFY=1
+
+cache:
+  untracked: true
+  key: "$CI_BUILD_REF_NAME"
+
+stages:
+  - build
+  - deploy
+
+build:
+  stage: build
+  image: iad.ocir.io/servicehealth/docker:stable
+  variables:
+    DOCKER_HOST: tcp://localhost:2375/
+    DOCKER_DRIVER: overlay2
+    CI_REGISTRY: iad.ocir.io
+    CI_REGISTRY_IMAGE: iad.ocir.io/servicehealth/hello-world
+  services:
+    - iad.ocir.io/octo/docker:dind
+  script:
+    - echo "$SH_OCI_REGISTRY_PASSWD" |  docker login -u "$SH_OCI_REGISTRY_USER" --password-stdin  "$CI_REGISTRY"
+    - export DOCKER_HOST="tcp://10.247.178.17:2375"
+    - docker build -t hello-world -f Dockerfile .
+    - docker tag 'hello-world:latest' "$CI_REGISTRY_IMAGE":"${CI_COMMIT_SHORT_SHA}"
+    - docker push  "$CI_REGISTRY_IMAGE":"${CI_COMMIT_SHORT_SHA}"
+    - echo "$CI_REGISTRY_IMAGE":"${CI_COMMIT_SHORT_SHA}"
+  only:
+    - master
+
+deploy-preprod-iad:
+  stage: deploy
+  image: iad.ocir.io/servicehealth/dtzar/helm-kubectl
+  script:
+    - export no_proxy="localhost,10.247.194.75"
+    # - sed -i "s/<VERSION>/ol-${CI_COMMIT_SHORT_SHA}/g" k8s/hello_world_deploy.yaml
+    - echo "Deploy PreProd - IAD Region"
+    - kubectl config set-cluster preprod-k8s-phx --server="${PHX_FUSION_PREPROD_API}"
+    - kubectl config set clusters.preprod-k8s-phx.certificate-authority-data ${PHX_FUSION_PREPROD_CERTIFICATE_AUTHORITY_DATA}
+    - kubectl config set-credentials gitlab --token="${PHX_FUSION_PREPROD_USER_TOKEN}"
+    - kubectl config set-context preprod --cluster=preprod-k8s-phx --user=gitlab
+    - kubectl config use-context preprod
+    - kubectl apply -f k8s/hello_world_deploy.yaml -f k8s/secret.yaml -f k8s/ingress.yaml
+  only:
+    - master
